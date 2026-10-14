@@ -106,7 +106,9 @@ def process_file(file_path, chdman_exe):
         # === 逻辑 A: 解压缩 (CHD 还原为 镜像/CUE+BIN) ===
         if ext == ".chd":
             res = subprocess.run([chdman_exe, "info", "-i", temp_input], capture_output=True, text=True, errors='ignore')
-            is_dvd = "Tag: 'DVD '" in res.stdout
+            
+            # 通过 track 的 mode 识别，/2048 为 DVD (PS2)，/2352 等为 CD
+            is_dvd = bool(re.search(r'TYPE:\s*\w+/2048', res.stdout)) or "Tag: 'DVD '" in res.stdout
             
             if is_dvd:
                 mode = "extractdvd"
