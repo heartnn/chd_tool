@@ -107,8 +107,8 @@ def process_file(file_path, chdman_exe):
         if ext == ".chd":
             res = subprocess.run([chdman_exe, "info", "-i", temp_input], capture_output=True, text=True, errors='ignore')
             
-            # 通过 track 的 mode 识别，/2048 为 DVD (PS2)，/2352 等为 CD
-            is_dvd = bool(re.search(r'TYPE:\s*\w+/2048', res.stdout)) or "Tag: 'DVD '" in res.stdout
+            # 1. 先根据 chdman info 识别
+            is_dvd = "Tag: 'DVD '" in res.stdout or re.search(r'TYPE:\s*\w+/2048', res.stdout)
             
             if is_dvd:
                 mode = "extractdvd"
@@ -119,29 +119,57 @@ def process_file(file_path, chdman_exe):
                 mode = "extractcd"
                 temp_extract_out = temp_stem + ".cue"
                 real_out = p.stem + ".cue"
-                print(f">>> 智能识别 [CD/PS1], 正在还原 CUE+BIN: {p.name}")
-            
+                print(f">>> 智能识别 [CD/PS1] (或待验证), 正在还原: {p.name}")
+                
             if not Path(real_out).exists():
+                # 2. 调用 chdman 解压缩
                 subprocess.run([chdman_exe, mode, "-i", temp_input, "-o", temp_extract_out])
                 
-                if not is_dvd and os.path.exists(temp_extract_out):
+                # 3. 如果最后生成了 cue，则验证一下 cue 文件
+                if mode == "extractcd" and os.path.exists(temp_extract_out):
                     temp_bin = temp_stem + ".bin"
                     real_bin = p.stem + ".bin"
+                    real_iso = p.stem + ".iso"
                     
-                    if os.path.exists(temp_bin):
-                        os.rename(temp_bin, real_bin)
-                    
+                    is_ps2_iso = False
                     try:
                         with open(temp_extract_out, "r", encoding="utf-8", errors="ignore") as f:
                             cue_text = f.read()
-                        cue_text = cue_text.replace(f'"{temp_bin}"', f'"{real_bin}"')
-                        with open(temp_extract_out, "w", encoding="utf-8") as f:
-                            f.write(cue_text)
+                        # 4. 验证是不是 ps2 的 iso (包含 2048 模式)
+                        if re.search(r'MODE\d+/2048', cue_text, re.IGNORECASE):
+                            is_ps2_iso = True
                     except Exception:
                         pass
-                
-                if os.path.exists(temp_extract_out):
-                    os.rename(temp_extract_out, real_out)
+                    
+                    if is_ps2_iso:
+                        # 是 PS2 的 ISO，把 bin 转为 iso，删除 cue
+                        print(f"    [CUE验证] 发现 2048 模式，判定为 PS2/ISO，正在转换...")
+                        if os.path.exists(temp_bin):
+                            os.rename(temp_bin, temp_stem + ".iso")
+                        if os.path.exists(temp_extract_out):
+                            os.remove(temp_extract_out)
+                        # 重命名为最终的 iso
+                        if os.path.exists(temp_stem + ".iso") and not os.path.exists(real_iso):
+                            os.rename(temp_stem + ".iso", real_iso)
+                    else:
+                        # 正常的 CD，处理 cue + bin
+                        if os.path.exists(temp_bin):
+                            os.rename(temp_bin, real_bin)
+                        try:
+                            with open(temp_extract_out, "r", encoding="utf-8", errors="ignore") as f:
+                                cue_text = f.read()
+                            cue_text = cue_text.replace(f'"{temp_bin}"', f'"{real_bin}"')
+                            cue_text = re.sub(rf'FILE\s+{re.escape(temp_bin)}', f'FILE "{real_bin}"', cue_text, flags=re.IGNORECASE)
+                            with open(temp_extract_out, "w", encoding="utf-8") as f:
+                                f.write(cue_text)
+                        except Exception:
+                            pass
+                        if os.path.exists(temp_extract_out) and not os.path.exists(real_out):
+                            os.rename(temp_extract_out, real_out)
+                            
+                elif mode == "extractdvd" and os.path.exists(temp_extract_out):
+                    if not os.path.exists(real_out):
+                        os.rename(temp_extract_out, real_out)
             else:
                 print(f"--- 跳过: {real_out} 已存在")
 
